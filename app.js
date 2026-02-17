@@ -1,3 +1,8 @@
+import * as stateModule from './state.js';
+import { createNav } from './nav.js';
+import { createActions } from './actions.js';
+import { createRenderer } from './render.js';
+
 /* Tuinlog MVP — 5 boeken + detail sheets
    - Logboek: start/stop/pauze, items toevoegen
    - Afrekenboek: bundel logs, per regel Factuur/Cash dropdown
@@ -8,6 +13,8 @@
 
 const STORAGE_KEY = "tuinlog_mvp_v1";
 const $ = (s) => document.querySelector(s);
+const NAV_TRANSITION_MS = 240;
+const NAV_TRANSITION_EASING = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 
 const uid = () => Math.random().toString(16).slice(2) + "-" + Math.random().toString(16).slice(2);
 const now = () => Date.now();
@@ -591,7 +598,7 @@ function clearDemoData(st){
   ensureStateSafetyAfterMutations(st);
 }
 
-let state = loadState();
+let state = stateModule.loadState();
 
 // ---------- Computations ----------
 function sumWorkMs(log){
@@ -1114,17 +1121,47 @@ function currentView(){
 
 function updateTabs(){
   const key = ui.navStack[0]?.view || "logs";
+  const inDetail = ui.navStack.length > 1;
   $("#tab-logs").classList.toggle("hidden", key !== "logs");
   $("#tab-settlements").classList.toggle("hidden", key !== "settlements");
   $("#tab-meer").classList.toggle("hidden", key !== "meer");
 
   $("#nav-logs").classList.toggle("active", key === "logs");
   $("#nav-settlements").classList.toggle("active", key === "settlements");
-  $("#nav-meer").classList.toggle("active", key === "meer");
+
+  const navMeer = $("#nav-meer");
+  // When a detail view is open, replace the bottom-right "Meer" tab with a back button
+  // so the user can go back with their thumb.
+  if (inDetail){
+    navMeer.classList.remove("active");
+    navMeer.setAttribute("aria-selected", "false");
+    navMeer.setAttribute("aria-label", "Terug");
+    navMeer.setAttribute("title", "Terug");
+    navMeer.dataset.mode = "back";
+    navMeer.innerHTML = `
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span></span>
+    `;
+  } else {
+    navMeer.classList.toggle("active", key === "meer");
+    navMeer.setAttribute("aria-selected", String(key === "meer"));
+    navMeer.setAttribute("aria-label", "Meer");
+    navMeer.setAttribute("title", "Meer");
+    navMeer.dataset.mode = "tab";
+    navMeer.innerHTML = `
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="5" r="1.5"/>
+        <circle cx="12" cy="12" r="1.5"/>
+        <circle cx="12" cy="19" r="1.5"/>
+      </svg>
+      <span>Meer</span>
+    `;
+  }
 
   $("#nav-logs").setAttribute("aria-selected", String(key === "logs"));
   $("#nav-settlements").setAttribute("aria-selected", String(key === "settlements"));
-  $("#nav-meer").setAttribute("aria-selected", String(key === "meer"));
 }
 
 function viewTitle(viewState){
@@ -1236,9 +1273,26 @@ function popView(){
   render();
 }
 
+function popViewInstant(){
+  if (ui.navStack.length <= 1) return;
+  ui.transition = null;
+  ui.navStack.pop();
+  render();
+}
+
+// --- Swipe gestures removed ---
+// Custom swipe gestures in iOS PWAs often feel inconsistent and can conflict with scroll.
+// The app now relies on explicit back buttons for predictable navigation.
+
+
+
 $("#nav-logs").addEventListener("click", ()=>setTab("logs"));
 $("#nav-settlements").addEventListener("click", ()=>setTab("settlements"));
-$("#nav-meer").addEventListener("click", ()=>setTab("meer"));
+$("#nav-meer").addEventListener("click", ()=>{
+  // In detail view this button becomes a thumb-friendly back action.
+  if (ui.navStack.length > 1) return popView();
+  return setTab("meer");
+});
 
 $("#btnBack").addEventListener("click", popView);
 $("#btnNewLog").onclick = ()=>{
@@ -1321,7 +1375,7 @@ function render(){
       setTimeout(()=>{
         detailPage.className = "page hidden";
         detailPage.innerHTML = '<div class="page-inner"><div class="detail-head"><div id="sheetTitle" class="hidden"></div><div class="sheet-actions" id="sheetActions"></div></div><div class="sheet-body" id="sheetBody"></div></div>';
-      }, 280);
+      }, NAV_TRANSITION_MS);
     } else {
       detailPage.className = "page hidden";
       rootPage.className = "page active";
@@ -1329,6 +1383,8 @@ function render(){
   }
   ui.transition = null;
 }
+
+// (no swipe gesture setup)
 
 function getLogbookPeriodStart(period){
   const current = new Date();
@@ -2999,9 +3055,18 @@ if ("serviceWorker" in navigator){
 }
 
 // init
+const nav = createNav();
+const modularActions = createActions({ getState: () => state, setState: (next) => { state = next; }, commit });
+const renderer = createRenderer({ getState: () => state, actions: modularActions, nav, renderImpl: render });
+
+// Quick checks:
+// - Start log -> stop log works
+// - Create settlement -> calculate -> icons correct
+// - Backup export/import still works
+// - Refresh persists state
 installIOSNoZoomGuards();
 setTab("logs");
-render();
+renderer.render();
 
 // Timer tick: update active timer display every 15 seconds
 setInterval(()=>{
